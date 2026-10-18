@@ -11,6 +11,7 @@ A toolkit around [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) with a **web U
 | 50-voice library (+ your saved clones) | Voice Library | `POST /api/tts/voice`, `GET/POST/DELETE /api/voices` | `poly-tts speak`, `poly-tts voices` |
 | Preset voice + style instruction | Style | `POST /api/tts/style` | `poly-tts style` |
 | Speech-to-text for reference clips (Whisper) | automatic in the clone modes | `POST /api/transcribe` | `poly-tts transcribe` |
+| Cloned voice with full emotion/style control | Styled Clone | `POST /api/tts/styled-clone` | `poly-tts styled-clone` |
 
 Supported languages: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian (or `Auto`).
 
@@ -62,7 +63,33 @@ I told you not to open that door! [pause 800ms] [style: whispering, terrified]It
 ```
 
 * `[pause]` inserts 0.5 s of silence. `[pause 800ms]`, `[pause 1.5s]` and `[pause 2]` set an explicit length.
-* `[style: …]…[/style]` adds an instruction for that span only. Cloned voices ignore it, because the Base model takes no instructions.
+* `[style: …]…[/style]` adds an instruction for that span only. Cloned voices ignore it, because the Base model takes no instructions. Use Styled Clone to style a cloned voice.
+
+## Styled Clone
+
+The Base model that clones voices takes no instructions, so plain clones can't follow emotion or style controls. Styled Clone works around this in two steps:
+
+1. A **performer** speaks the text with every control (emotion, intensity, delivery, pace, pitch, intonation, pauses, free-text instruction and `[style:…]` markup). The performer is a native speaker or designed preset, a voice you describe, or by default a VoiceDesign voice picked to match the target's pitch range.
+2. **Zero-shot voice conversion** gives that performance the cloned voice's timbre and keeps its timing and intonation. It uses [Seed-VC](https://github.com/Plachtaa/seed-vc) (best quality), or [OpenVoice v2](https://github.com/myshell-ai/OpenVoice) as a lighter, faster fallback.
+
+The target can be an uploaded or recorded clip, a saved clone or a designed preset. A performer close to the target's gender and pitch converts best. Output is 22.05 kHz.
+
+Setup: both converters run from a source checkout, because their PyPI packaging pins old numpy/protobuf versions that conflict with qwen-tts. Their weights download from Hugging Face on first use.
+
+```sh
+uv sync --extra qwen --extra vc
+git clone https://github.com/Plachtaa/seed-vc data/vendor/seed-vc          # tested at 51383ef
+git clone https://github.com/myshell-ai/OpenVoice data/vendor/OpenVoice    # optional fallback, tested at 74a1d14
+```
+
+```sh
+poly-tts styled-clone "I can't believe you did this!" --ref-audio me.wav --emotion anger --intensity strong --delivery shouting
+poly-tts styled-clone "Come closer..." --voice me --performer serena --delivery whisper --vc-steps 40
+curl -X POST localhost:8000/api/tts/styled-clone -F text="No way!" -F ref_audio=@me.wav \
+  -F controls='{"emotion":"surprise","intensity":"strong"}' -F conversion='{"steps":30}' -o styled.wav
+```
+
+Conversion options are `steps` (Seed-VC diffusion steps, default 25: 30–50 sound best, 4–10 are fast), `cfg_rate` (Seed-VC guidance, default 0.7) and `tau` (OpenVoice, default 0.3). `GET /api/info` reports which converters are installed under `voice_conversion`.
 
 ## Voice library
 
@@ -128,6 +155,8 @@ The full schema is at `/docs`.
 | `POLY_TTS_MIN_REF_SECONDS` / `_MAX_REF_SECONDS` | `3` / `60` |
 | `POLY_TTS_AUTO_TRANSCRIBE` | `1` (transcribe reference clips that have no transcript; `0` to disable) |
 | `POLY_TTS_ASR_MODEL` | `openai/whisper-large-v3-turbo` |
+| `POLY_TTS_VC` | `auto` (Styled Clone converter: Seed-VC if installed, else OpenVoice; or `seed-vc` / `openvoice`) |
+| `POLY_TTS_SEED_VC_DIR` / `_OPENVOICE_DIR` | `<data dir>/vendor/seed-vc` / `<data dir>/vendor/OpenVoice` |
 
 The 0.6B CustomVoice checkpoint ignores instructions, so the defaults use 1.7B.
 
@@ -137,4 +166,4 @@ The 0.6B CustomVoice checkpoint ignores instructions, so the defaults use 1.7B.
 uv run pytest      # uses the mock backend; no GPU needed
 ```
 
-Layout: `src/poly_tts/` contains `engine.py` (the feature logic), `backends/` (qwen, mock), `asr.py` (Whisper transcription), `controls.py` (controls and markup), `voices.py` and `library.py` (the voice library), `api/` (FastAPI), `web/` (UI) and `cli.py`.
+Layout: `src/poly_tts/` contains `engine.py` (the feature logic), `backends/` (qwen, mock), `asr.py` (Whisper transcription), `vc.py` (Styled Clone voice conversion), `controls.py` (controls and markup), `voices.py` and `library.py` (the voice library), `api/` (FastAPI), `web/` (UI) and `cli.py`.

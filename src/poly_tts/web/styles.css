@@ -114,6 +114,8 @@ textarea[readonly] { opacity: .7; }
 .gen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 18px; margin-bottom: 10px; }
 .gen-option .help { line-height: 1.4; }
 .gen-option .default { color: var(--text); }
+.performer-body:not(:empty) { margin-top: 8px; }
+.form .warn { font-size: 12px; background: var(--warn-bg); color: var(--warn-text); padding: 6px 8px; border-radius: 4px; margin-bottom: 10px; }
 
 .voice-picker select { height: 190px; }
 .voice-picker .voice-filter { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; margin-bottom: 6px; }

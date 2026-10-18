@@ -64,6 +64,8 @@ def _write_output(args, wav: bytes, meta: dict) -> None:
             print(f"instruction: {meta['instruct']}", file=sys.stderr)
         if meta.get("ref_text_auto"):
             print(f"reference transcript (Whisper): {meta['ref_text_auto']}", file=sys.stderr)
+        if meta.get("converter"):
+            print(f"performer: {meta['performer']}, converter: {meta['converter']}", file=sys.stderr)
         for w in meta.get("warnings", []):
             print(f"warning: {w}", file=sys.stderr)
 
@@ -131,6 +133,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source-language", help="Language of the reference clip (informational).")
     _add_reference(p, required=False)
     p.add_argument("--voice", help="Use a library voice instead of --ref-audio.")
+
+    p = sub.add_parser("styled-clone", help="Cloned voice with full emotion/style control (performance + voice conversion).",
+                       description="A performer voice speaks the text with the emotion/prosody controls, then zero-shot "
+                                   "voice conversion (Seed-VC, or OpenVoice v2) converts it to the cloned voice's timbre.")
+    _add_common(p)
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--ref-audio", type=Path, help="Clip of the voice to clone (>= 3 s).")
+    target.add_argument("--voice", help="Saved cloned voice or designed preset to clone.")
+    performer = p.add_mutually_exclusive_group()
+    performer.add_argument("--performer", metavar="VOICE",
+                           help="Native speaker or designed preset that performs the read (default: auto by pitch).")
+    performer.add_argument("--performer-description", help="Describe the performer's voice instead.")
+    p.add_argument("--instruct", help="Extra free-text style instruction.")
+    _add_controls(p)
+    g = p.add_argument_group("voice conversion")
+    g.add_argument("--converter", choices=["auto", "seed-vc", "openvoice"], help="Default: auto (Seed-VC if installed).")
+    g.add_argument("--vc-steps", type=int, help="Seed-VC diffusion steps (default 25; 30-50 = best quality, 4-10 = fast).")
+    g.add_argument("--vc-cfg-rate", type=float, help="Seed-VC guidance strength 0-1 (default 0.7).")
+    g.add_argument("--vc-tau", type=float, help="OpenVoice temperature (default 0.3).")
 
     p = sub.add_parser("speak", help="Speak with a voice from the library.")
     _add_common(p)
@@ -225,6 +246,12 @@ def run(args) -> int:
             raise SystemExit("error: give exactly one of --ref-audio or --voice")
         wav, meta = client.cross_lingual(text, args.target_language, args.ref_audio, _read_ref_text(args), args.voice,
                                          args.source_language, args.x_vector_only, gen)
+    elif cmd == "styled-clone":
+        conversion = {k: v for k, v in (("steps", args.vc_steps), ("cfg_rate", args.vc_cfg_rate), ("tau", args.vc_tau))
+                      if v is not None}
+        wav, meta = client.styled_clone(text, args.language, args.ref_audio, args.voice, args.performer,
+                                        args.performer_description, _controls(args), args.instruct, args.converter,
+                                        conversion or None, gen)
     elif cmd == "speak":
         wav, meta = client.speak(text, args.voice, args.language, gen)
     elif cmd == "style":

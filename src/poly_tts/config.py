@@ -32,6 +32,11 @@ class Settings:
     # Transcribe reference clips with Whisper when no transcript is given (instead of x-vector-only cloning).
     auto_transcribe: bool = field(default_factory=lambda: _env("AUTO_TRANSCRIBE", "1").lower() not in ("0", "false", "no", "off"))
     asr_model: str = field(default_factory=lambda: _env("ASR_MODEL", "openai/whisper-large-v3-turbo"))
+    # Styled Clone voice conversion: "auto" (Seed-VC, else OpenVoice), "seed-vc" or "openvoice".
+    voice_converter: str = field(default_factory=lambda: _env("VC", "auto"))
+    # Source checkouts of the converters (default: <data_dir>/vendor/seed-vc and <data_dir>/vendor/OpenVoice).
+    seed_vc_path: str = field(default_factory=lambda: _env("SEED_VC_DIR", ""))
+    openvoice_path: str = field(default_factory=lambda: _env("OPENVOICE_DIR", ""))
 
     @property
     def voices_dir(self) -> Path:
@@ -40,6 +45,14 @@ class Settings:
     @property
     def presets_dir(self) -> Path:
         return self.data_dir / "presets"
+
+    @property
+    def seed_vc_dir(self) -> Path:
+        return Path(self.seed_vc_path) if self.seed_vc_path else self.data_dir / "vendor" / "seed-vc"
+
+    @property
+    def openvoice_dir(self) -> Path:
+        return Path(self.openvoice_path) if self.openvoice_path else self.data_dir / "vendor" / "OpenVoice"
 
 
 _settings: Settings | None = None

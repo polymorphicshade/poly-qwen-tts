@@ -57,6 +57,16 @@ class LocalClient:
     def style(self, text, voice_id, instruct, language="Auto", generation=None) -> Result:
         return self._out(self.engine.style(text, voice_id, instruct, language, self._params(generation)))
 
+    def styled_clone(self, text, language="Auto", ref_audio: Optional[Path] = None, voice_id=None, performer_voice_id=None,
+                     performer_description=None, controls=None, instruct=None, converter=None, conversion=None,
+                     generation=None) -> Result:
+        from .vc import ConversionParams
+
+        ref = load_audio(ref_audio) if ref_audio else None
+        return self._out(self.engine.styled_clone(
+            text, language, ref, voice_id, performer_voice_id, performer_description, self._controls(controls), instruct,
+            converter, ConversionParams(**(conversion or {})), self._params(generation)))
+
     def voices(self) -> list[dict]:
         return [v.to_dict() for v in self.engine.library.list()]
 
@@ -72,7 +82,8 @@ class LocalClient:
         from .voices import LANGUAGES
 
         return {"backend": self.engine.info(), "languages": LANGUAGES, "controls": control_options(),
-                "generation_options": GENERATION_OPTIONS, "transcription": self.engine.transcription_info()}
+                "generation_options": GENERATION_OPTIONS, "transcription": self.engine.transcription_info(),
+                "voice_conversion": self.engine.voice_conversion_info()}
 
     def transcribe(self, audio: Path, language="Auto") -> dict:
         t = self.engine.transcribe(load_audio(audio), language)
@@ -141,6 +152,14 @@ class HttpClient:
 
     def style(self, text, voice_id, instruct, language="Auto", generation=None) -> Result:
         return self._post_json("/api/tts/style", dict(text=text, voice_id=voice_id, instruct=instruct, language=language, generation=generation))
+
+    def styled_clone(self, text, language="Auto", ref_audio: Optional[Path] = None, voice_id=None, performer_voice_id=None,
+                     performer_description=None, controls=None, instruct=None, converter=None, conversion=None,
+                     generation=None) -> Result:
+        return self._post_form("/api/tts/styled-clone", dict(
+            text=text, language=language, voice_id=voice_id, performer_voice_id=performer_voice_id,
+            performer_description=performer_description, controls=controls, instruct=instruct, converter=converter,
+            conversion=conversion, generation=generation), ref_audio)
 
     def voices(self) -> list[dict]:
         return self._check(self.http.get("/api/voices")).json()

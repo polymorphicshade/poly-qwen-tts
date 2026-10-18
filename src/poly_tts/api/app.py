@@ -21,10 +21,11 @@ from pydantic import ValidationError
 from .. import __version__
 from ..audio import Audio, load_audio
 from ..backends import GENERATION_OPTIONS, BackendError
-from ..controls import control_options
+from ..controls import Controls, control_options
 from ..engine import Engine, SynthesisResult, get_engine
 from ..voices import LANGUAGES
-from .schemas import ControlRequest, DesignRequest, GenerationOptions, StyleRequest, VoiceRequest, params
+from .schemas import (ControlRequest, ConversionOptions, DesignRequest, GenerationOptions, StyleRequest, VoiceRequest,
+                      params)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -47,13 +48,18 @@ async def _read_upload(upload: Optional[UploadFile]) -> Optional[Audio]:
     return load_audio(data)
 
 
-def _generation_form(raw: Optional[str]) -> Optional[GenerationOptions]:
+def _json_form(raw: Optional[str], model, name: str):
+    """Parse a JSON-encoded multipart field into a pydantic model."""
     if not raw:
         return None
     try:
-        return GenerationOptions.model_validate_json(raw)
+        return model.model_validate_json(raw)
     except ValidationError as e:
-        raise HTTPException(422, f"Invalid 'generation' JSON: {e.errors()}") from e
+        raise HTTPException(422, f"Invalid '{name}' JSON: {e.errors()}") from e
+
+
+def _generation_form(raw: Optional[str]) -> Optional[GenerationOptions]:
+    return _json_form(raw, GenerationOptions, "generation")
 
 
 def create_app(engine: Optional[Engine] = None) -> FastAPI:
@@ -97,6 +103,7 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
             "voice_counts": {k: sum(v.kind == k for v in voices) for k in ("native", "designed", "cloned")},
             "reference_audio": {"min_seconds": e.settings.min_ref_seconds, "max_seconds": e.settings.max_ref_seconds},
             "transcription": e.transcription_info(),
+            "voice_conversion": e.voice_conversion_info(),
         }
 
     @app.post("/api/transcribe", tags=["meta"])
@@ -220,6 +227,37 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
     def style(req: StyleRequest):
         """Preset voice + natural-language style instruction."""
         return _audio_response(eng().style(req.text, req.voice_id, req.instruct, req.language, params(req.generation)))
+
+    @app.post("/api/tts/styled-clone", tags=["tts"], response_class=Response,
+              responses={200: {"content": {"audio/wav": {}}}})
+    async def styled_clone(
+        text: str = Form(...),
+        language: str = Form("Auto"),
+        ref_audio: Optional[UploadFile] = File(None, description="Clip of the voice to clone (3 s or longer)."),
+        voice_id: Optional[str] = Form(None, description="Or a saved cloned voice / designed preset from the library."),
+        performer_voice_id: Optional[str] = Form(None, description=(
+            "Native speaker or designed preset that performs the styled read. Default: a VoiceDesign voice "
+            "matched to the target's pitch range.")),
+        performer_description: Optional[str] = Form(None, description="Or describe the performer's voice."),
+        controls: Optional[str] = Form(None, description='Controls as JSON, e.g. {"emotion": "anger", "intensity": "strong"}.'),
+        instruct: Optional[str] = Form(None, description="Extra free-text style instruction."),
+        converter: Optional[str] = Form(None, description="auto (default), seed-vc or openvoice."),
+        conversion: Optional[str] = Form(None, description="ConversionOptions as JSON."),
+        generation: Optional[str] = Form(None, description="GenerationOptions as JSON."),
+    ):
+        """Styled Clone: a cloned voice with full emotion/prosody control.
+
+        CustomVoice/VoiceDesign performs the text with the controls, then zero-shot voice conversion
+        (Seed-VC, or OpenVoice v2) converts the performance to the cloned voice's timbre.
+        """
+        ref = await _read_upload(ref_audio)
+        ctl = _json_form(controls, Controls, "controls")
+        conv = _json_form(conversion, ConversionOptions, "conversion")
+        gen = _generation_form(generation)
+        result = await run_in_threadpool(
+            eng().styled_clone, text, language, ref, voice_id or None, performer_voice_id or None,
+            performer_description, ctl, instruct, converter, conv.to_params() if conv else None, params(gen))
+        return _audio_response(result)
 
     # ------------------------------------------------------------------ web UI
 

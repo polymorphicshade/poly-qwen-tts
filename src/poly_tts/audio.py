@@ -80,6 +80,30 @@ def peak_normalize(wav: np.ndarray, peak: float = 0.95) -> np.ndarray:
     return (wav * (peak / m)).astype(np.float32)
 
 
+def median_pitch(wav: np.ndarray, sr: int, fmin: float = 60.0, fmax: float = 400.0) -> float | None:
+    """Median fundamental frequency (Hz) of the voiced parts, via frame autocorrelation; None if unvoiced."""
+    if sr != 16000:  # analyse at 16 kHz: plenty for voice pitch and keeps this cheap
+        n = int(len(wav) * 16000 / sr)
+        wav = np.interp(np.linspace(0, len(wav) - 1, n), np.arange(len(wav)), wav).astype(np.float32)
+        sr = 16000
+    frame, hop = int(0.04 * sr), int(0.01 * sr)
+    if len(wav) < frame:
+        return None
+    idx = np.arange(frame)[None, :] + hop * np.arange((len(wav) - frame) // hop + 1)[:, None]
+    frames = wav[idx] * np.hanning(frame).astype(np.float32)
+    energy = np.sqrt(np.mean(frames ** 2, axis=1))
+    frames = frames[energy > max(0.02, 0.1 * float(energy.max()))]
+    if not len(frames):
+        return None
+    spec = np.fft.rfft(frames, n=2 * frame, axis=1)
+    ac = np.fft.irfft(np.abs(spec) ** 2, axis=1)[:, :frame]
+    lo, hi = int(sr / fmax), int(sr / fmin)
+    lags = lo + np.argmax(ac[:, lo:hi], axis=1)
+    strength = ac[np.arange(len(ac)), lags] / np.maximum(ac[:, 0], 1e-9)
+    f0 = sr / lags[strength > 0.4]
+    return float(np.median(f0)) if f0.size else None
+
+
 def fingerprint(audio: Audio, *extra: object) -> str:
     wav, sr = audio
     h = hashlib.sha1(np.ascontiguousarray(wav).tobytes())

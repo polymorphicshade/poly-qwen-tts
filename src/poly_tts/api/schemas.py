@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..backends import GENERATION_OPTIONS, GenerationParams
 from ..controls import Controls
+from ..vc import ConversionParams
 
 
 def _describe(name: str) -> str:
@@ -71,3 +72,19 @@ class StyleRequest(_Base):
     language: str = LANGUAGE
     voice_id: str
     instruct: str = Field(..., min_length=1, max_length=2000, examples=["Sound incredulous, as if you can't believe what you just heard"])
+
+
+class ConversionOptions(BaseModel):
+    """Voice-conversion options for Styled Clone. Unset fields use the converter's defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: Optional[int] = Field(None, ge=1, le=200, description=(
+        "Seed-VC diffusion steps (default 25). More steps (30-50) give cleaner, more faithful timbre; fewer (4-10) are faster."))
+    cfg_rate: Optional[float] = Field(None, ge=0, le=1, description=(
+        "Seed-VC guidance strength (default 0.7). Higher pushes harder toward the cloned timbre; lower keeps more of the performer."))
+    tau: Optional[float] = Field(None, gt=0, le=1, description=(
+        "OpenVoice sampling temperature (default 0.3). Lower is more stable; higher can sound more natural but less consistent."))
+
+    def to_params(self) -> ConversionParams:
+        return ConversionParams(**self.model_dump())

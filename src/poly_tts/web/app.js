@@ -8,6 +8,7 @@ const MODES = [
   { id: "control", label: "Emotion & Prosody", hint: "Fine-grained control over emotion, intensity, delivery (e.g. whisper), pace, pitch, intonation and pauses. Inline markup works too." },
   { id: "clone", label: "Voice Clone", hint: "Clone any voice from a reference clip of 3 seconds or more. The clip's transcript gives the most faithful clone; if you leave it empty, Whisper writes it for you." },
   { id: "cross", label: "Cross-lingual", hint: "Clone a voice from one language and have it speak another, keeping its timbre and accent." },
+  { id: "styled", label: "Styled Clone", hint: "A cloned voice with full emotion and style control: a built-in voice performs the line with your controls, then voice conversion (Seed-VC or OpenVoice) gives it the cloned voice's timbre." },
   { id: "voice", label: "Voice Library", hint: "Pick a ready-made voice: 9 native speakers, 41 designed presets and your saved clones." },
   { id: "style", label: "Style", hint: "Combine a library voice with a natural-language style instruction." },
 ];
@@ -70,6 +71,8 @@ function newWorkspace(name) {
     controls: {}, instruct: "", styleInstruct: STYLE_EXAMPLES[0],
     refText: "", xVectorOnly: false, saveName: "",
     crossSource: "upload", crossVoiceId: "", targetLanguage: "French", sourceLanguage: "",
+    styledSource: "upload", styledVoiceId: "", performerSource: "auto", performerVoiceId: "ryan", performerDescription: "",
+    converter: "auto", vc: {},
     voiceFilter: { q: "", kind: "", language: "" }, gen: {},
   };
 }
@@ -244,12 +247,13 @@ function languageField(ws, key = "language", label = "Language", opts) {
   return `<div class="field"><label>${label}</label><select data-k="${key}">${languageOptions(ws[key], opts)}</select></div>`;
 }
 
-function voicePicker(ws, key, { styleOnly = false, label = "Voice" } = {}) {
+function voicePicker(ws, key, { styleOnly = false, kinds = null, label = "Voice" } = {}) {
   const f = ws.voiceFilter;
   const q = (f.q || "").toLowerCase();
   let voices = app.voices.filter((v) => (!f.kind || v.kind === f.kind) && (!f.language || v.language === f.language)
     && (!q || `${v.id} ${v.name} ${v.description} ${v.tags.join(" ")}`.toLowerCase().includes(q)));
   if (styleOnly) voices = voices.filter((v) => v.supports_style);
+  if (kinds) voices = voices.filter((v) => kinds.includes(v.kind));
   const groups = { native: "Native speakers", designed: "Designed presets", cloned: "My cloned voices" };
   const options = Object.entries(groups).map(([kind, title]) => {
     const vs = voices.filter((v) => v.kind === kind);
@@ -287,7 +291,7 @@ function chips(list, target) {
   return `<div class="chips">${list.map((t) => `<button type="button" class="chip" data-chip="${target}" data-value="${esc(t)}">${esc(t.length > 48 ? t.slice(0, 46) + "…" : t)}</button>`).join("")}</div>`;
 }
 
-function refAudioField(ws) {
+function refAudioField(ws, { transcript = true } = {}) {
   const rt = app.runtime[ws.id];
   const min = app.info?.reference_audio?.min_seconds ?? 3;
   let info = "No reference yet. Upload a clip or record one (3 to 15 seconds of clean speech works best).";
@@ -303,13 +307,55 @@ function refAudioField(ws) {
       </div>
       <div class="ref-info ${bad ? "bad" : ""}">${info}</div>
       ${rt.refUrl ? `<audio controls src="${rt.refUrl}"></audio>` : ""}
-    </div></div>
+    </div></div>` + (!transcript ? "" : `
     <div class="field"><div class="label-row"><label>Reference transcript <span class="help">(left empty, Whisper fills it in)</span></label>
         ${rt.refFile ? `<button type="button" class="link" data-action="transcribe" ${rt.transcribing ? "disabled" : ""}>Transcribe with Whisper</button>` : ""}</div>
       <textarea data-k="refText" ${rt.transcribing ? "readonly" : ""} placeholder="${rt.transcribing ? "Transcribing with Whisper…" : "Exactly what is said in the reference clip"}">${esc(ws.refText)}</textarea>
       ${rt.transcribing ? `<div class="help"><span class="spinner"></span> Transcribing with Whisper…</div>` : ""}
       <label class="checkbox help"><input type="checkbox" data-k="xVectorOnly" ${ws.xVectorOnly ? "checked" : ""}> Speaker-embedding only (no transcript needed, less faithful)</label>
-    </div>`;
+    </div>`);
+}
+
+function performerField(ws) {
+  const seg = (value, label) => `<button type="button" data-seg="performerSource" data-value="${value}" class="${ws.performerSource === value ? "on" : ""}">${label}</button>`;
+  let body = "";
+  if (ws.performerSource === "library") {
+    const groups = { native: "Native speakers", designed: "Designed presets" };
+    body = `<select data-k="performerVoiceId" aria-label="Performer voice">${Object.entries(groups).map(([kind, title]) =>
+      `<optgroup label="${title}">${app.voices.filter((v) => v.kind === kind).map((v) =>
+        `<option value="${esc(v.id)}" ${v.id === ws.performerVoiceId ? "selected" : ""}>${esc(v.name)} — ${esc(v.language)} · ${v.gender} · ${v.age}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  } else if (ws.performerSource === "description") {
+    body = `<textarea data-k="performerDescription" placeholder="Describe the performer's voice, e.g. expressive adult female voice">${esc(ws.performerDescription)}</textarea>`;
+  }
+  return `<div class="field"><span class="label">Performer</span>
+    <div class="segmented">${seg("auto", "Automatic")}${seg("library", "Built-in voice")}${seg("description", "Describe a voice")}</div>
+    <div class="performer-body">${body}</div>
+    <div class="help">The performer speaks the line with your emotion and style. Its timbre is then replaced by the cloned voice.
+      A performer close to the target's gender and pitch converts best; Automatic picks one from the target's pitch.</div></div>`;
+}
+
+function conversionField(ws) {
+  const vc = app.info?.voice_conversion;
+  const converters = vc?.converters || {};
+  const option = (name, label) => {
+    const missing = converters[name] && !converters[name].available;
+    return `<option value="${name}" ${ws.converter === name ? "selected" : ""} ${missing ? "disabled" : ""}>${label}${missing ? " (not installed)" : ""}</option>`;
+  };
+  const num = (k, label, step, min, max, placeholder, help) => `<div><label class="label">${label}</label>
+    <input type="number" step="${step}" min="${min}" max="${max}" data-k="vc.${k}" data-num value="${ws.vc[k] ?? ""}" placeholder="${placeholder}">
+    <div class="help">${help}</div></div>`;
+  const none = vc && Object.keys(converters).length && Object.values(converters).every((c) => !c.available);
+  const showSeed = ws.converter !== "openvoice", showOpen = ws.converter !== "seed-vc";
+  return `<details ${none ? "open" : ""}><summary>Voice conversion</summary>
+    ${none ? `<div class="warn">No voice converter is installed. ${esc(converters["seed-vc"]?.detail || "")}</div>` : ""}
+    <div class="field"><label>Converter</label><select data-k="converter">
+      ${option("auto", "Automatic (Seed-VC if installed, else OpenVoice)")}${option("seed-vc", "Seed-VC: best quality")}${option("openvoice", "OpenVoice v2: lighter and faster")}
+    </select></div>
+    <div class="row">
+      ${showSeed ? num("steps", "Seed-VC steps", 1, 1, 200, "25", "More steps (30–50) give a cleaner, closer timbre; fewer (4–10) are faster.") : ""}
+      ${showSeed ? num("cfg_rate", "Seed-VC guidance", 0.05, 0, 1, "0.7", "Higher pushes harder toward the cloned timbre; lower keeps more of the performer.") : ""}
+      ${showOpen ? num("tau", "OpenVoice tau", 0.05, 0.05, 1, "0.3", "Lower is steadier; higher can sound more natural but less consistent.") : ""}
+    </div></details>`;
 }
 
 function generationField(ws) {
@@ -372,6 +418,18 @@ function renderForm(ws) {
           <textarea class="main-text" data-k="text">${esc(ws.text)}</textarea>
           <button type="button" class="link" data-action="sample-text">Insert sample sentence in target language</button></div>`;
       break;
+    case "styled":
+      html = `<div class="field"><span class="label">Voice to clone</span><div class="segmented">
+          <button type="button" data-seg="styledSource" data-value="upload" class="${ws.styledSource === "upload" ? "on" : ""}">Upload / record</button>
+          <button type="button" data-seg="styledSource" data-value="library" class="${ws.styledSource === "library" ? "on" : ""}">Library voice</button>
+        </div></div>
+        ${ws.styledSource === "upload" ? refAudioField(ws, { transcript: false })
+          : voicePicker(ws, "styledVoiceId", { kinds: ["cloned", "designed"], label: "Voice to clone" })}
+        ${performerField(ws)}${controlsField(ws)}
+        <div class="field"><label>Extra instruction <span class="help">(optional)</span></label>
+          <input type="text" data-k="instruct" value="${esc(ws.instruct)}" placeholder="e.g. voice cracks on the last word"></div>
+        ${textField(ws)}${languageField(ws)}${conversionField(ws)}`;
+      break;
     case "voice":
       html = `${voicePicker(ws, "voiceId")}${textField(ws)}${languageField(ws)}`;
       break;
@@ -408,7 +466,7 @@ function bindForm(ws, form) {
       setPath(ws, key, value);
       if (key.startsWith("controls.") && !value) delete ws.controls[key.split(".")[1]];
       save();
-      if (input.tagName === "SELECT" && (key === "voiceId" || key === "crossVoiceId")) renderForm(ws);
+      if (input.tagName === "SELECT" && ["voiceId", "crossVoiceId", "styledVoiceId", "converter"].includes(key)) renderForm(ws);
     };
     input.addEventListener(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input", handler);
   });
@@ -470,7 +528,7 @@ async function setReference(ws, file) {
     ctx.close();
   } catch { /* the server validates anyway */ }
   renderForm(ws);
-  if (!ws.refText.trim() && !ws.xVectorOnly) transcribeReference(ws);
+  if ((ws.mode === "clone" || ws.mode === "cross") && !ws.refText.trim() && !ws.xVectorOnly) transcribeReference(ws);
 }
 
 // Fill the reference transcript with Whisper. Without `force`, a transcript the user typed is kept.
@@ -579,7 +637,7 @@ async function saveVoice(ws) {
 }
 
 async function deleteVoice(ws) {
-  const key = ws.mode === "cross" ? "crossVoiceId" : "voiceId";
+  const key = { cross: "crossVoiceId", styled: "styledVoiceId" }[ws.mode] || "voiceId";
   const voice = app.voices.find((v) => v.id === ws[key]);
   if (!voice || !confirm(`Delete cloned voice "${voice.name}"?`)) return;
   try {
@@ -621,6 +679,34 @@ function buildRequest(ws) {
       return { url: "/api/tts/voice", init: json({ ...base, voice_id: ws.voiceId }), label: voiceName(ws.voiceId) };
     case "style":
       return { url: "/api/tts/style", init: json({ ...base, voice_id: ws.voiceId, instruct: ws.styleInstruct }), label: `Style · ${voiceName(ws.voiceId)}` };
+    case "styled": {
+      const fd = new FormData();
+      fd.append("text", ws.text);
+      fd.append("language", ws.language);
+      let target;
+      if (ws.styledSource === "library") {
+        if (!ws.styledVoiceId) throw new Error("Pick the voice to clone.");
+        fd.append("voice_id", ws.styledVoiceId);
+        target = voiceName(ws.styledVoiceId);
+      } else {
+        if (!rt.refFile) throw new Error("Add reference audio (upload or record) first.");
+        fd.append("ref_audio", rt.refFile);
+        target = rt.refFile.name;
+      }
+      if (ws.performerSource === "library" && ws.performerVoiceId) fd.append("performer_voice_id", ws.performerVoiceId);
+      if (ws.performerSource === "description") {
+        if (!ws.performerDescription.trim()) throw new Error("Describe the performer's voice, or choose Automatic.");
+        fd.append("performer_description", ws.performerDescription.trim());
+      }
+      const controls = cleanControls(ws.controls);
+      if (controls) fd.append("controls", JSON.stringify(controls));
+      if (ws.instruct) fd.append("instruct", ws.instruct);
+      if (ws.converter && ws.converter !== "auto") fd.append("converter", ws.converter);
+      const conversion = cleanGen(ws.vc);
+      if (conversion) fd.append("conversion", JSON.stringify(conversion));
+      if (generation) fd.append("generation", JSON.stringify(generation));
+      return { url: "/api/tts/styled-clone", init: { method: "POST", body: fd }, label: `Styled clone · ${target}` };
+    }
     case "clone":
     case "cross": {
       const fd = new FormData();
@@ -701,7 +787,7 @@ function renderResults(ws) {
     return `<div class="result"><div class="title"><span>${esc(r.label)}</span><button class="link" data-remove="${r.id}">remove</button></div>
       <div class="text">${esc(r.text)}</div>
       <audio controls preload="metadata" src="${r.url}" ${i === 0 && !r.played ? "autoplay" : ""}></audio>
-      <div class="meta"><span>${m.duration ?? "?"} s audio</span><span>${m.elapsed ?? "?"} s to generate</span><span>${esc(m.language || "")}</span>${m.segments > 1 ? `<span>${m.segments} segments</span>` : ""}</div>
+      <div class="meta"><span>${m.duration ?? "?"} s audio</span><span>${m.elapsed ?? "?"} s to generate</span><span>${esc(m.language || "")}</span>${m.segments > 1 ? `<span>${m.segments} segments</span>` : ""}${m.converter ? `<span>performer ${esc(m.performer)} → ${esc(m.converter)}</span>` : ""}</div>
       ${m.instruct ? `<div class="instruct">“${esc(m.instruct)}”</div>` : ""}
       ${m.ref_text_auto ? `<div class="instruct">Reference transcript (Whisper): “${esc(m.ref_text_auto)}”</div>` : ""}
       ${(m.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join("")}
