@@ -91,6 +91,15 @@ class VoiceLibrary:
             (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return self._voice_from_meta(meta)
 
+    def set_ref_text(self, voice_id: str, ref_text: str) -> None:
+        """Store a transcript for a saved voice (e.g. one produced by auto-transcription)."""
+        with self._lock:
+            meta = self._meta(_slug(voice_id))
+            if not meta:
+                raise LookupError(f"{voice_id!r} is not a saved cloned voice.")
+            meta["ref_text"] = ref_text
+            (self.dir / meta["id"] / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def remove(self, voice_id: str) -> None:
         if get_builtin_voice(voice_id):
             raise ValueError("Built-in voices cannot be removed.")

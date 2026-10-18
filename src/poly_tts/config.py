@@ -29,6 +29,10 @@ class Settings:
     min_ref_seconds: float = field(default_factory=lambda: float(_env("MIN_REF_SECONDS", "3.0")))
     max_ref_seconds: float = field(default_factory=lambda: float(_env("MAX_REF_SECONDS", "60.0")))
 
+    # Transcribe reference clips with Whisper when no transcript is given (instead of x-vector-only cloning).
+    auto_transcribe: bool = field(default_factory=lambda: _env("AUTO_TRANSCRIBE", "1").lower() not in ("0", "false", "no", "off"))
+    asr_model: str = field(default_factory=lambda: _env("ASR_MODEL", "openai/whisper-large-v3-turbo"))
+
     @property
     def voices_dir(self) -> Path:
         return self.data_dir / "voices"

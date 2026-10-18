@@ -10,6 +10,7 @@ A toolkit around [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) with a **web U
 | Cross-lingual voice cloning | Cross-lingual | `POST /api/tts/cross-lingual` | `poly-tts cross-lingual` |
 | 50-voice library (+ your saved clones) | Voice Library | `POST /api/tts/voice`, `GET/POST/DELETE /api/voices` | `poly-tts speak`, `poly-tts voices` |
 | Preset voice + style instruction | Style | `POST /api/tts/style` | `poly-tts style` |
+| Speech-to-text for reference clips (Whisper) | automatic in the clone modes | `POST /api/transcribe` | `poly-tts transcribe` |
 
 Supported languages: Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian (or `Auto`).
 
@@ -29,6 +30,16 @@ To try the UI, API and CLI without a GPU, use the mock backend, which outputs pl
 ## Web UI
 
 Each **tab is an independent workspace** with every control. Use `+` (or Alt+N) to open one and `×` (or middle-click, or Alt+W) to close it. Double-click a tab to rename it. Workspaces can generate in parallel, and their settings are remembered in the browser. In the clone modes you can upload a clip or record one from the microphone, and save it to the voice library.
+
+## Automatic reference transcripts
+
+Cloning is most faithful when the Base model gets the transcript of the reference clip. If you leave the transcript empty, it is generated with Whisper (`openai/whisper-large-v3-turbo`, ~1.6 GB, downloaded on first use):
+
+* **Web UI**: uploading or recording a clip fills the empty *Reference transcript* box. Check it and fix it if needed. *Transcribe with Whisper* runs it again on demand.
+* **API / CLI**: a clone, cross-lingual or save-voice request without `ref_text` is transcribed on the server. The transcript is returned as `ref_text_auto` in the result metadata. `POST /api/transcribe` and `poly-tts transcribe clip.wav` return a transcript on their own.
+* Saved voices that have no transcript get one the first time they are used, and it is stored with the voice.
+
+Pass `x_vector_only` (`--x-vector-only`) to skip the transcript, or set `POLY_TTS_AUTO_TRANSCRIBE=0` to turn auto-transcription off. Either way, cloning without a transcript uses the speaker embedding only. If transcription fails, the request still succeeds in embedding-only mode and returns a warning.
 
 ## Granular control
 
@@ -71,6 +82,7 @@ poly-tts cross-lingual "Bonjour à tous !" -t fr --voice me          # or --ref-
 poly-tts speak "Ready for the big game?" --voice sports_commentator
 poly-tts style "You actually won?" --voice serena -i "sound incredulous and excited"
 echo "Text from a pipe" | poly-tts speak --voice aiden -o - > out.wav
+poly-tts transcribe me.wav -l en                                  # Whisper transcript of a clip
 ```
 
 Common options: `-l/--language`, `-o/--output` (`-` writes to stdout), `--json` (prints metadata), `--seed`, `--temperature`, `--top-p`, `--top-k`, `--max-new-tokens`, `--text-file`.
@@ -101,6 +113,8 @@ The full schema is at `/docs`.
 | `POLY_TTS_MAX_LOADED_MODELS` | `3` (least recently used model is unloaded first) |
 | `POLY_TTS_DATA_DIR` | `./data` |
 | `POLY_TTS_MIN_REF_SECONDS` / `_MAX_REF_SECONDS` | `3` / `60` |
+| `POLY_TTS_AUTO_TRANSCRIBE` | `1` (transcribe reference clips that have no transcript; `0` to disable) |
+| `POLY_TTS_ASR_MODEL` | `openai/whisper-large-v3-turbo` |
 
 The 0.6B CustomVoice checkpoint ignores instructions, so the defaults use 1.7B.
 
@@ -110,4 +124,4 @@ The 0.6B CustomVoice checkpoint ignores instructions, so the defaults use 1.7B.
 uv run pytest      # uses the mock backend; no GPU needed
 ```
 
-Layout: `src/poly_tts/` contains `engine.py` (the feature logic), `backends/` (qwen, mock), `controls.py` (controls and markup), `voices.py` and `library.py` (the voice library), `api/` (FastAPI), `web/` (UI) and `cli.py`.
+Layout: `src/poly_tts/` contains `engine.py` (the feature logic), `backends/` (qwen, mock), `asr.py` (Whisper transcription), `controls.py` (controls and markup), `voices.py` and `library.py` (the voice library), `api/` (FastAPI), `web/` (UI) and `cli.py`.

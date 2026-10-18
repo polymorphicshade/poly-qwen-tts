@@ -58,12 +58,6 @@ def test_clone_requires_three_seconds(engine):
         engine.clone("hi", load_audio(make_wav(1.5)), "ref")
 
 
-def test_clone_without_transcript_falls_back_to_xvector(engine):
-    r = engine.clone("hello", load_audio(make_wav(4)))
-    assert last_call(engine, "create_clone_prompt")["x_vector_only"] is True
-    assert any("transcript" in w for w in r.warnings)
-
-
 def test_clone_prompt_cached_for_same_reference(engine):
     ref = load_audio(make_wav(4))
     engine.clone("a", ref, "the transcript")

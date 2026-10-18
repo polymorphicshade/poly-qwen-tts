@@ -106,6 +106,10 @@ details { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px
 details > summary { cursor: pointer; font-weight: 600; }
 details[open] > summary { margin-bottom: 10px; }
 .checkbox { display: flex; gap: 8px; align-items: center; }
+.label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.label-row > label { font-weight: 600; }
+.link:disabled { opacity: .5; cursor: progress; }
+textarea[readonly] { opacity: .7; }
 
 .voice-picker select { height: 190px; }
 .voice-picker .voice-filter { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; margin-bottom: 6px; }

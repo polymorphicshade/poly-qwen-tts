@@ -70,7 +70,12 @@ class LocalClient:
         from .controls import control_options
         from .voices import LANGUAGES
 
-        return {"backend": self.engine.info(), "languages": LANGUAGES, "controls": control_options()}
+        return {"backend": self.engine.info(), "languages": LANGUAGES, "controls": control_options(),
+                "transcription": self.engine.transcription_info()}
+
+    def transcribe(self, audio: Path, language="Auto") -> dict:
+        t = self.engine.transcribe(load_audio(audio), language)
+        return {"text": t.text, "language": t.language or "Auto", "model": t.model}
 
 
 class ApiError(RuntimeError):
@@ -149,3 +154,7 @@ class HttpClient:
 
     def info(self) -> dict:
         return self._check(self.http.get("/api/info")).json()
+
+    def transcribe(self, audio: Path, language="Auto") -> dict:
+        files = {"audio": (Path(audio).name, Path(audio).read_bytes(), "application/octet-stream")}
+        return self._check(self.http.post("/api/transcribe", data={"language": language}, files=files)).json()

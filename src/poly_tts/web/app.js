@@ -6,7 +6,7 @@ const STORAGE_KEY = "polytts.workspaces.v1";
 const MODES = [
   { id: "design", label: "Voice Design", hint: "Describe a brand-new voice in plain language: timbre, age, accent, emotion, pace and style." },
   { id: "control", label: "Emotion & Prosody", hint: "Fine-grained control over emotion, intensity, delivery (e.g. whisper), pace, pitch, intonation and pauses. Inline markup works too." },
-  { id: "clone", label: "Voice Clone", hint: "Clone any voice from a reference clip of 3 seconds or more. Adding the clip's transcript gives the most faithful clone." },
+  { id: "clone", label: "Voice Clone", hint: "Clone any voice from a reference clip of 3 seconds or more. The clip's transcript gives the most faithful clone; if you leave it empty, Whisper writes it for you." },
   { id: "cross", label: "Cross-lingual", hint: "Clone a voice from one language and have it speak another, keeping its timbre and accent." },
   { id: "voice", label: "Voice Library", hint: "Pick a ready-made voice: 9 native speakers, 41 designed presets and your saved clones." },
   { id: "style", label: "Style", hint: "Combine a library voice with a natural-language style instruction." },
@@ -201,7 +201,7 @@ function mountWorkspace(ws) {
   const el = $("#workspace-template").content.firstElementChild.cloneNode(true);
   el.dataset.id = ws.id;
   $("#workspaces").appendChild(el);
-  app.runtime[ws.id] = { el, refFile: null, refUrl: null, refSeconds: null, results: [], busy: false, recorder: null };
+  app.runtime[ws.id] = { el, refFile: null, refUrl: null, refSeconds: null, results: [], busy: false, recorder: null, transcribing: false };
   $(".clear-results", el).addEventListener("click", () => {
     const rt = app.runtime[ws.id];
     rt.results.forEach((r) => r.url && URL.revokeObjectURL(r.url));
@@ -304,8 +304,10 @@ function refAudioField(ws) {
       <div class="ref-info ${bad ? "bad" : ""}">${info}</div>
       ${rt.refUrl ? `<audio controls src="${rt.refUrl}"></audio>` : ""}
     </div></div>
-    <div class="field"><label>Reference transcript <span class="help">(recommended)</span></label>
-      <textarea data-k="refText" placeholder="Exactly what is said in the reference clip">${esc(ws.refText)}</textarea>
+    <div class="field"><div class="label-row"><label>Reference transcript <span class="help">(left empty, Whisper fills it in)</span></label>
+        ${rt.refFile ? `<button type="button" class="link" data-action="transcribe" ${rt.transcribing ? "disabled" : ""}>Transcribe with Whisper</button>` : ""}</div>
+      <textarea data-k="refText" ${rt.transcribing ? "readonly" : ""} placeholder="${rt.transcribing ? "Transcribing with Whisper…" : "Exactly what is said in the reference clip"}">${esc(ws.refText)}</textarea>
+      ${rt.transcribing ? `<div class="help"><span class="spinner"></span> Transcribing with Whisper…</div>` : ""}
       <label class="checkbox help"><input type="checkbox" data-k="xVectorOnly" ${ws.xVectorOnly ? "checked" : ""}> Speaker-embedding only (no transcript needed, less faithful)</label>
     </div>`;
 }
@@ -427,6 +429,7 @@ function bindForm(ws, form) {
     if (file) setReference(ws, file);
   });
   form.querySelector("[data-action='record']")?.addEventListener("click", () => toggleRecording(ws));
+  form.querySelector("[data-action='transcribe']")?.addEventListener("click", () => transcribeReference(ws, true));
   form.querySelector("[data-action='save-voice']")?.addEventListener("click", () => saveVoice(ws));
   form.querySelector("[data-action='delete-voice']")?.addEventListener("click", () => deleteVoice(ws));
   form.querySelector("[data-action='sample-text']")?.addEventListener("click", () => {
@@ -453,6 +456,33 @@ async function setReference(ws, file) {
     ctx.close();
   } catch { /* the server validates anyway */ }
   renderForm(ws);
+  if (!ws.refText.trim() && !ws.xVectorOnly) transcribeReference(ws);
+}
+
+// Fill the reference transcript with Whisper. Without `force`, a transcript the user typed is kept.
+async function transcribeReference(ws, force = false) {
+  const rt = app.runtime[ws.id];
+  if (!rt.refFile || rt.transcribing) return;
+  const file = rt.refFile;
+  const fd = new FormData();
+  fd.append("audio", file);
+  fd.append("language", ws.mode === "cross" ? (ws.sourceLanguage || "Auto") : ws.language);
+  rt.transcribing = true;
+  renderForm(ws);
+  let error = "";
+  try {
+    const { text } = await (await api("/api/transcribe", { method: "POST", body: fd })).json();
+    if (rt.refFile === file && (force || !ws.refText.trim())) {
+      ws.refText = text;
+      save();
+    }
+  } catch (e) {
+    error = `Auto-transcription failed: ${e.message}. Type the transcript, or tick speaker-embedding only.`;
+  } finally {
+    rt.transcribing = false;
+    renderForm(ws);
+    if (error) showError(ws, error);
+  }
 }
 
 function encodeWav(buffer) {
@@ -659,6 +689,7 @@ function renderResults(ws) {
       <audio controls preload="metadata" src="${r.url}" ${i === 0 && !r.played ? "autoplay" : ""}></audio>
       <div class="meta"><span>${m.duration ?? "?"} s audio</span><span>${m.elapsed ?? "?"} s to generate</span><span>${esc(m.language || "")}</span>${m.segments > 1 ? `<span>${m.segments} segments</span>` : ""}</div>
       ${m.instruct ? `<div class="instruct">“${esc(m.instruct)}”</div>` : ""}
+      ${m.ref_text_auto ? `<div class="instruct">Reference transcript (Whisper): “${esc(m.ref_text_auto)}”</div>` : ""}
       ${(m.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join("")}
       <div class="links"><a href="${r.url}" download="${file}">Download WAV</a></div></div>`;
   }).join("");

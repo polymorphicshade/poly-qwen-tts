@@ -61,6 +61,8 @@ def _write_output(args, wav: bytes, meta: dict) -> None:
         print(f"wrote {where} ({meta.get('duration')}s audio, generated in {meta.get('elapsed')}s)", file=sys.stderr)
         if meta.get("instruct"):
             print(f"instruction: {meta['instruct']}", file=sys.stderr)
+        if meta.get("ref_text_auto"):
+            print(f"reference transcript (Whisper): {meta['ref_text_auto']}", file=sys.stderr)
         for w in meta.get("warnings", []):
             print(f"warning: {w}", file=sys.stderr)
 
@@ -91,7 +93,7 @@ def _add_controls(p: argparse.ArgumentParser) -> None:
 
 def _add_reference(p: argparse.ArgumentParser, required: bool) -> None:
     p.add_argument("--ref-audio", type=Path, required=required, help="Reference clip, >= 3 s (WAV/FLAC/OGG/MP3).")
-    p.add_argument("--ref-text", help="Transcript of the reference clip (recommended).")
+    p.add_argument("--ref-text", help="Transcript of the reference clip (if omitted, Whisper transcribes it).")
     p.add_argument("--ref-text-file", help="Read the reference transcript from a file.")
     p.add_argument("--x-vector-only", action="store_true", help="Speaker-embedding-only cloning (no transcript; less faithful).")
 
@@ -154,6 +156,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr = vs.add_parser("remove", help="Delete a saved cloned voice.")
     pr.add_argument("voice_id")
 
+    p = sub.add_parser("transcribe", help="Transcribe a clip with Whisper (e.g. to get a reference transcript).")
+    p.add_argument("audio", type=Path, help="Audio file (WAV/FLAC/OGG/MP3).")
+    p.add_argument("-l", "--language", default="Auto", help="Spoken language (default: Auto-detect).")
+    p.add_argument("-o", "--output", help="Also write the transcript to this text file.")
+    p.add_argument("--json", action="store_true", help="Print the result as JSON.")
+
     p = sub.add_parser("info", help="Show backend, languages and control options.")
 
     p = sub.add_parser("serve", help="Run the web UI + REST API.")
@@ -193,6 +201,12 @@ def run(args) -> int:
         return 0
     if cmd == "voices":
         return _voices(args, client)
+    if cmd == "transcribe":
+        result = client.transcribe(args.audio, args.language)
+        if args.output:
+            Path(args.output).write_text(result["text"] + "\n", encoding="utf-8")
+        print(json.dumps(result, ensure_ascii=False) if args.json else result["text"])
+        return 0
 
     text = _read_text(args)
     gen = _generation(args)

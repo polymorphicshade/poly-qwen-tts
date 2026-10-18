@@ -7,6 +7,7 @@ warnings, …) is in the ``X-TTS-Metadata`` header as URL-encoded JSON.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -94,7 +95,22 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
             "controls": control_options(),
             "voice_counts": {k: sum(v.kind == k for v in voices) for k in ("native", "designed", "cloned")},
             "reference_audio": {"min_seconds": e.settings.min_ref_seconds, "max_seconds": e.settings.max_ref_seconds},
+            "transcription": e.transcription_info(),
         }
+
+    @app.post("/api/transcribe", tags=["meta"])
+    async def transcribe(
+        audio: UploadFile = File(..., description="Speech to transcribe (WAV/FLAC/OGG/MP3)."),
+        language: str = Form("Auto", description="Spoken language, or Auto to detect it."),
+    ):
+        """Transcribe speech with Whisper, e.g. to fill in a reference transcript for cloning."""
+        clip = await _read_upload(audio)
+        if clip is None:
+            raise HTTPException(400, "audio is empty.")
+        t0 = time.perf_counter()
+        result = await run_in_threadpool(eng().transcribe, clip, language)
+        return {"text": result.text, "language": result.language or "Auto", "model": result.model,
+                "duration": round(len(clip[0]) / clip[1], 3), "elapsed": round(time.perf_counter() - t0, 3)}
 
     # ------------------------------------------------------------------ voice library
 
@@ -159,7 +175,7 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
     async def clone(
         text: str = Form(...),
         ref_audio: UploadFile = File(..., description="Reference clip, 3 s or longer (WAV/FLAC/OGG/MP3)."),
-        ref_text: Optional[str] = Form(None, description="Transcript of the reference clip (recommended)."),
+        ref_text: Optional[str] = Form(None, description="Transcript of the reference clip. If omitted, Whisper transcribes it."),
         language: str = Form("Auto"),
         x_vector_only: bool = Form(False),
         generation: Optional[str] = Form(None, description="GenerationOptions as JSON."),
