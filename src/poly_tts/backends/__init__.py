@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..config import Settings
-from .base import Backend, BackendError, GenerationParams
+from .base import GENERATION_OPTIONS, Backend, BackendError, GenerationParams
 
 
 def create_backend(settings: Settings) -> Backend:
@@ -16,4 +16,4 @@ def create_backend(settings: Settings) -> Backend:
     raise BackendError(f"Unknown backend {settings.backend!r} (expected 'qwen' or 'mock').")
 
 
-__all__ = ["Backend", "BackendError", "GenerationParams", "create_backend"]
+__all__ = ["GENERATION_OPTIONS", "Backend", "BackendError", "GenerationParams", "create_backend"]

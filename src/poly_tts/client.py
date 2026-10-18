@@ -67,11 +67,12 @@ class LocalClient:
         self.engine.remove_voice(voice_id)
 
     def info(self) -> dict:
+        from .backends import GENERATION_OPTIONS
         from .controls import control_options
         from .voices import LANGUAGES
 
         return {"backend": self.engine.info(), "languages": LANGUAGES, "controls": control_options(),
-                "transcription": self.engine.transcription_info()}
+                "generation_options": GENERATION_OPTIONS, "transcription": self.engine.transcription_info()}
 
     def transcribe(self, audio: Path, language="Auto") -> dict:
         t = self.engine.transcribe(load_audio(audio), language)

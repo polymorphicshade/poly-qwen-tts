@@ -59,3 +59,12 @@ def test_stdin_and_errors(engine, tmp_path, capsys, monkeypatch):
 def test_voices_list_table(engine, capsys):
     code, stdout, _ = run(capsys, "voices", "list")
     assert code == 0 and "noir_detective" in stdout and "uncle_fu" in stdout
+
+
+def test_generation_option_help(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        main(["speak", "--help"])
+    out = capsys.readouterr().out
+    assert "stutters" in out and "(default: 1.05)" in out

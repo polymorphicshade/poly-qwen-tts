@@ -4,8 +4,14 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..backends import GenerationParams
+from ..backends import GENERATION_OPTIONS, GenerationParams
 from ..controls import Controls
+
+
+def _describe(name: str) -> str:
+    opt = GENERATION_OPTIONS[name]
+    default = f" Default: {opt['default']}." if opt["default"] is not None else ""
+    return opt["description"] + default
 
 
 class GenerationOptions(BaseModel):
@@ -13,12 +19,12 @@ class GenerationOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    temperature: Optional[float] = Field(None, gt=0, le=2)
-    top_p: Optional[float] = Field(None, gt=0, le=1)
-    top_k: Optional[int] = Field(None, ge=1, le=1000)
-    repetition_penalty: Optional[float] = Field(None, ge=1, le=2)
-    max_new_tokens: Optional[int] = Field(None, ge=16, le=8192)
-    seed: Optional[int] = Field(None, ge=0)
+    temperature: Optional[float] = Field(None, gt=0, le=2, description=_describe("temperature"))
+    top_p: Optional[float] = Field(None, gt=0, le=1, description=_describe("top_p"))
+    top_k: Optional[int] = Field(None, ge=1, le=1000, description=_describe("top_k"))
+    repetition_penalty: Optional[float] = Field(None, ge=1, le=2, description=_describe("repetition_penalty"))
+    max_new_tokens: Optional[int] = Field(None, ge=16, le=8192, description=_describe("max_new_tokens"))
+    seed: Optional[int] = Field(None, ge=0, description=_describe("seed"))
 
     def to_params(self) -> GenerationParams:
         return GenerationParams(**self.model_dump())

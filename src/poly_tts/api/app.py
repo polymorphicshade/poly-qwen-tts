@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from .. import __version__
 from ..audio import Audio, load_audio
-from ..backends import BackendError
+from ..backends import GENERATION_OPTIONS, BackendError
 from ..controls import control_options
 from ..engine import Engine, SynthesisResult, get_engine
 from ..voices import LANGUAGES
@@ -93,6 +93,7 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
             "backend": e.info(),
             "languages": LANGUAGES,
             "controls": control_options(),
+            "generation_options": GENERATION_OPTIONS,
             "voice_counts": {k: sum(v.kind == k for v in voices) for k in ("native", "designed", "cloned")},
             "reference_audio": {"min_seconds": e.settings.min_ref_seconds, "max_seconds": e.settings.max_ref_seconds},
             "transcription": e.transcription_info(),

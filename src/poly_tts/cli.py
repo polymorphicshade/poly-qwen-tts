@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from .backends.base import GENERATION_OPTIONS
 from .controls import Controls, control_options
 
 
@@ -76,13 +77,12 @@ def _add_common(p: argparse.ArgumentParser, *, language: bool = True) -> None:
         p.add_argument("-l", "--language", default="Auto", help="Language name or code (default: Auto).")
     p.add_argument("-o", "--output", default="output.wav", help="Output WAV path, or '-' for stdout (default: output.wav).")
     p.add_argument("--json", action="store_true", help="Print result metadata as JSON.")
-    g = p.add_argument_group("generation options")
-    g.add_argument("--temperature", type=float)
-    g.add_argument("--top-p", type=float)
-    g.add_argument("--top-k", type=int)
-    g.add_argument("--repetition-penalty", type=float)
-    g.add_argument("--max-new-tokens", type=int)
-    g.add_argument("--seed", type=int, help="Fix the random seed for repeatable output.")
+    g = p.add_argument_group("generation options", "Unset options use the model defaults.")
+    for name, opt in GENERATION_OPTIONS.items():
+        default = f" (default: {opt['default']})" if opt["default"] is not None else ""
+        # argparse treats '%' as a format character in help strings.
+        g.add_argument(f"--{name.replace('_', '-')}", type=float if isinstance(opt["step"], float) else int,
+                       metavar=name.upper(), help=opt["description"].replace("%", "%%") + default)
 
 
 def _add_controls(p: argparse.ArgumentParser) -> None:

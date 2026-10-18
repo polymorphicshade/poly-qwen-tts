@@ -87,6 +87,19 @@ poly-tts transcribe me.wav -l en                                  # Whisper tran
 
 Common options: `-l/--language`, `-o/--output` (`-` writes to stdout), `--json` (prints metadata), `--seed`, `--temperature`, `--top-p`, `--top-k`, `--max-new-tokens`, `--text-file`.
 
+## Generation options
+
+These sampling options tune how a take sounds. Leave them unset to use the model defaults. The web UI shows this advice next to each box, `poly-tts <command> --help` prints it, and `GET /api/info` returns it as `generation_options`.
+
+| option | default | what it does |
+|---|---|---|
+| `temperature` | 0.9 | Lower (0.6–0.8) gives a steadier read. Higher (1.0–1.2) gives livelier intonation but can slur or glitch. |
+| `top_p` | 1.0 | Lower (0.8–0.95) trims unlikely sounds, so speech is cleaner but flatter. |
+| `top_k` | 50 | Smaller (10–30) is safer and more monotone. Larger allows more variety. |
+| `repetition_penalty` | 1.05 | Raise it to 1.1–1.2 if the voice stutters or loops. Too high distorts the voice. |
+| `max_new_tokens` | 8192 | Caps the audio length per segment (about 12 tokens per second). |
+| `seed` | random | The same seed, text and settings give the same take. Fix it, then change one option at a time. |
+
 By default the CLI loads models in-process. For scripting many calls, run `poly-tts serve` once and add `--server http://127.0.0.1:8000` (or set `POLY_TTS_SERVER`) so the models stay loaded between calls.
 
 ## API

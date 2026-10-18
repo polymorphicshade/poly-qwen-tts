@@ -108,3 +108,17 @@ def test_web_ui_served(client):
     res = client.get("/")
     assert res.status_code == 200 and "workspace-template" in res.text
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_generation_option_descriptions(client):
+    from dataclasses import fields
+
+    from poly_tts.backends import GenerationParams
+
+    opts = client.get("/api/info").json()["generation_options"]
+    assert list(opts) == [f.name for f in fields(GenerationParams)]
+    for opt in opts.values():
+        assert opt["label"] and len(opt["description"]) > 40
+        assert {"min", "max", "step", "default"} <= set(opt)
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["GenerationOptions"]["properties"]
+    assert "Default: 0.9." in schema["temperature"]["description"]

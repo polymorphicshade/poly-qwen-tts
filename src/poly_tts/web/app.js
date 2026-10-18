@@ -314,11 +314,20 @@ function refAudioField(ws) {
 
 function generationField(ws) {
   const g = ws.gen;
-  const num = (k, label, step, ph) => `<div><label class="label">${label}</label><input type="number" step="${step}" data-k="gen.${k}" data-num value="${g[k] ?? ""}" placeholder="${ph}"></div>`;
-  return `<details><summary>Generation options</summary><div class="row">
-    ${num("temperature", "Temperature", "0.05", "0.9")}${num("top_p", "Top-p", "0.05", "1.0")}${num("top_k", "Top-k", "1", "50")}
-    ${num("repetition_penalty", "Repetition penalty", "0.01", "1.05")}${num("max_new_tokens", "Max new tokens", "64", "2048")}${num("seed", "Seed", "1", "random")}
-  </div><div class="help">A fixed seed makes results repeatable.</div></details>`;
+  // Labels, ranges, defaults and tuning advice come from the server (GET /api/info → generation_options).
+  const opts = app.info?.generation_options || {};
+  const fields = Object.entries(opts).map(([k, o]) => {
+    const id = `${ws.id}-gen-${k}`;
+    return `<div class="gen-option"><label class="label" for="${id}">${esc(o.label)}</label>
+      <input id="${id}" type="number" step="${o.step}" min="${o.min}" ${o.max != null ? `max="${o.max}"` : ""} data-k="gen.${k}" data-num
+        value="${g[k] ?? ""}" placeholder="${o.default ?? "random"}" aria-describedby="${id}-help">
+      <div class="help" id="${id}-help">${esc(o.description)}${o.default != null ? ` <span class="default">Default: ${o.default}.</span>` : ""}</div></div>`;
+  }).join("");
+  return `<details><summary>Generation options</summary>
+    <p class="help gen-intro">These change how the model samples speech. Leave a box empty to use the model default (shown in grey).
+      Set a seed first, then change one option at a time to hear what it does.</p>
+    <div class="gen-grid">${fields || `<p class="help">Generation options are unavailable (the API could not be reached).</p>`}</div>
+    <button type="button" class="link" data-action="reset-gen">Reset all to defaults</button></details>`;
 }
 
 function renderForm(ws) {
@@ -430,6 +439,11 @@ function bindForm(ws, form) {
   });
   form.querySelector("[data-action='record']")?.addEventListener("click", () => toggleRecording(ws));
   form.querySelector("[data-action='transcribe']")?.addEventListener("click", () => transcribeReference(ws, true));
+  form.querySelector("[data-action='reset-gen']")?.addEventListener("click", () => {
+    ws.gen = {};
+    save();
+    renderForm(ws);
+  });
   form.querySelector("[data-action='save-voice']")?.addEventListener("click", () => saveVoice(ws));
   form.querySelector("[data-action='delete-voice']")?.addEventListener("click", () => deleteVoice(ws));
   form.querySelector("[data-action='sample-text']")?.addEventListener("click", () => {
