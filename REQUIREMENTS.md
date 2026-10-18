@@ -1,5 +1,5 @@
 # Overview
-This repo is meant to be a custom implementation of Wan Video: https://github.com/QwenLM/Qwen3-TTS
+This repo is meant to be a custom implementation of Qwen3-TTS: https://github.com/QwenLM/Qwen3-TTS
 
 Use Python, Torch, FastAPI, etc to complete the implementation.
 

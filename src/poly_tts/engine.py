@@ -1,0 +1,308 @@
+"""High-level synthesis engine. Implements the six core features on top of a :class:`Backend`.
+
+The web API and the CLI both call into this module, so behaviour is identical everywhere.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+import numpy as np
+
+from . import audio as A
+from .audio import Audio
+from .backends import Backend, GenerationParams, create_backend
+from .config import Settings, get_settings
+from .controls import Controls, Segment, has_styles, join_instructions, parse_markup
+from .library import VoiceLibrary
+from .voices import ANCHOR_TEXT, NATIVE_SPEAKER_IDS, Voice, normalize_language
+
+MAX_BATCH = 8
+PRESET_ANCHOR_SEED = 20240601
+
+
+@dataclass
+class SynthesisResult:
+    audio: np.ndarray
+    sample_rate: int
+    mode: str
+    language: str
+    voice_id: Optional[str] = None
+    instruct: Optional[str] = None
+    segments: int = 1
+    elapsed: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def duration(self) -> float:
+        return len(self.audio) / float(self.sample_rate)
+
+    def wav_bytes(self) -> bytes:
+        return A.to_wav_bytes(self.audio, self.sample_rate)
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode, "language": self.language, "voice_id": self.voice_id, "instruct": self.instruct,
+            "sample_rate": self.sample_rate, "duration": round(self.duration, 3), "segments": self.segments,
+            "elapsed": round(self.elapsed, 3), "warnings": self.warnings,
+        }
+
+
+class Engine:
+    def __init__(self, settings: Optional[Settings] = None, backend: Optional[Backend] = None):
+        self.settings = settings or get_settings()
+        self.backend = backend or create_backend(self.settings)
+        self.library = VoiceLibrary(self.settings.voices_dir)
+        self._prompts: OrderedDict[str, Any] = OrderedDict()
+        self._prompt_lock = threading.Lock()
+
+    # ================================================================ core features
+
+    def voice_design(self, text: str, description: str, language: str = "Auto",
+                     controls: Optional[Controls] = None, params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.1 — synthesize with a voice described in natural language."""
+        if not description or not description.strip():
+            raise ValueError("A voice description is required for voice design.")
+        base = join_instructions(description, controls.to_instruct() if controls else None)
+        return self._run("voice_design", text, language, None, lambda lang, segs, warn: self._design(
+            segs, lang, base, params or GenerationParams()), instruct=base)
+
+    def control(self, text: str, language: str = "Auto", voice_id: Optional[str] = None,
+                voice_description: Optional[str] = None, controls: Optional[Controls] = None,
+                instruct: Optional[str] = None, params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.2 — emotion / prosody control (structured controls + free text + inline markup)."""
+        if bool(voice_id) == bool(voice_description and voice_description.strip()):
+            raise ValueError("Provide exactly one of voice_id or voice_description.")
+        extra = join_instructions(controls.to_instruct() if controls else None, instruct)
+        if voice_description:
+            base = join_instructions(voice_description, extra)
+            return self._run("control", text, language, None, lambda lang, segs, warn: self._design(
+                segs, lang, base, params or GenerationParams()), instruct=base)
+        voice = self.library.get(voice_id)
+        return self._run("control", text, language, voice.id, lambda lang, segs, warn: self._with_voice(
+            voice, segs, lang, extra, params or GenerationParams(), warn), instruct=extra or None)
+
+    def clone(self, text: str, ref_audio: Audio, ref_text: Optional[str] = None, language: str = "Auto",
+              x_vector_only: bool = False, params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.3 — zero-shot cloning from a short (>= 3 s) reference clip."""
+        def synth(lang, segs, warn):
+            prompt = self._adhoc_prompt(ref_audio, ref_text, x_vector_only, warn)
+            return self._clone(segs, lang, prompt, params or GenerationParams(), warn)
+        return self._run("clone", text, language, None, synth)
+
+    def cross_lingual(self, text: str, target_language: str, ref_audio: Optional[Audio] = None,
+                      ref_text: Optional[str] = None, voice_id: Optional[str] = None,
+                      source_language: Optional[str] = None, x_vector_only: bool = False,
+                      params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.4 — clone a voice and make it speak a different language."""
+        target = normalize_language(target_language)
+        if target == "Auto":
+            raise ValueError("Cross-lingual cloning needs an explicit target language.")
+        if (ref_audio is None) == (not voice_id):
+            raise ValueError("Provide exactly one of ref_audio or voice_id.")
+        source = normalize_language(source_language) if source_language else None
+        p = params or GenerationParams()
+
+        if voice_id:
+            voice = self.library.get(voice_id)
+            source = source or (voice.language if voice.language != "Auto" else None)
+
+            def synth(lang, segs, warn):
+                return self._with_voice(voice, segs, lang, "", p, warn)
+        else:
+            def synth(lang, segs, warn):
+                prompt = self._adhoc_prompt(ref_audio, ref_text, x_vector_only, warn)
+                return self._clone(segs, lang, prompt, p, warn)
+
+        result = self._run("cross_lingual", text, target, voice_id and voice_id.lower(), synth)
+        if source and source == target:
+            result.warnings.append(f"Source and target language are both {target}; this is a same-language clone.")
+        return result
+
+    def speak(self, text: str, voice_id: str, language: str = "Auto",
+              params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.5 — speak with a voice from the library."""
+        voice = self.library.get(voice_id)
+        return self._run("voice", text, language, voice.id, lambda lang, segs, warn: self._with_voice(
+            voice, segs, lang, "", params or GenerationParams(), warn))
+
+    def style(self, text: str, voice_id: str, instruct: str, language: str = "Auto",
+              params: Optional[GenerationParams] = None) -> SynthesisResult:
+        """1.6 — a preset voice combined with a natural-language style instruction."""
+        if not instruct or not instruct.strip():
+            raise ValueError("A style instruction is required.")
+        voice = self.library.get(voice_id)
+        return self._run("style", text, language, voice.id, lambda lang, segs, warn: self._with_voice(
+            voice, segs, lang, instruct, params or GenerationParams(), warn), instruct=instruct.strip())
+
+    # ================================================================ library management
+
+    def save_voice(self, name: str, ref_audio: Audio, ref_text: Optional[str] = None, language: str = "Auto",
+                   description: Optional[str] = None) -> Voice:
+        warnings: list[str] = []
+        ref = self._prepare_reference(ref_audio, ref_text, warnings)
+        return self.library.add(name, ref, ref_text, normalize_language(language), description)
+
+    def remove_voice(self, voice_id: str) -> None:
+        self.library.remove(voice_id)
+        with self._prompt_lock:
+            self._prompts.pop(f"voice:{voice_id.lower()}", None)
+
+    def info(self) -> dict[str, Any]:
+        return self.backend.status()
+
+    # ================================================================ internals
+
+    def _run(self, mode: str, text: str, language: str, voice_id: Optional[str],
+             synth: Callable[[str, list[Segment], list[str]], tuple[np.ndarray, int]],
+             instruct: Optional[str] = None) -> SynthesisResult:
+        if not text or not text.strip():
+            raise ValueError("Text is required.")
+        lang = normalize_language(language)
+        segments = parse_markup(text)
+        warnings: list[str] = []
+        t0 = time.perf_counter()
+        wav, sr = synth(lang, segments, warnings)
+        return SynthesisResult(
+            audio=wav, sample_rate=sr, mode=mode, language=lang, voice_id=voice_id, instruct=instruct or None,
+            segments=sum(1 for s in segments if s.text), elapsed=time.perf_counter() - t0, warnings=warnings,
+        )
+
+    @staticmethod
+    def _render(segments: list[Segment], instruct_for: Callable[[Segment], str],
+                call: Callable[[list[str], list[str]], tuple[list[np.ndarray], int]]) -> tuple[np.ndarray, int]:
+        """Synthesize speech segments in batches, then interleave the requested pauses."""
+        speech = [s for s in segments if s.text]
+        wavs: list[np.ndarray] = []
+        sr = 24000
+        for i in range(0, len(speech), MAX_BATCH):
+            chunk = speech[i:i + MAX_BATCH]
+            out, sr = call([s.text for s in chunk], [instruct_for(s) for s in chunk])
+            wavs.extend(out)
+        it = iter(wavs)
+        pieces = [A.silence(s.pause, sr) if s.is_pause else next(it) for s in segments]
+        return A.concat(pieces, sr), sr
+
+    def _design(self, segments, language, base_instruct, params):
+        return self._render(
+            segments,
+            lambda s: join_instructions(base_instruct, s.style),
+            lambda texts, instructs: self.backend.voice_design(texts, language, instructs, params),
+        )
+
+    def _clone(self, segments, language, prompt, params, warnings):
+        if has_styles(segments):
+            warnings.append("[style:...] tags were ignored: cloned voices (Base model) don't take instructions.")
+        return self._render(
+            segments, lambda s: "",
+            lambda texts, _: self.backend.voice_clone(texts, language, prompt, params),
+        )
+
+    def _with_voice(self, voice: Voice, segments, language, extra: str, params, warnings):
+        styled = bool(extra) or has_styles(segments)
+        if voice.kind == "native":
+            speaker = NATIVE_SPEAKER_IDS[voice.id]
+            return self._render(
+                segments,
+                lambda s: join_instructions(extra, s.style),
+                lambda texts, instructs: self.backend.custom_voice(texts, language, speaker, instructs, params),
+            )
+        if voice.kind == "designed":
+            if styled:
+                # Re-describe the voice and add the style; timbre stays close to, not identical with, the preset.
+                return self._design(segments, language, join_instructions(voice.description, extra), params)
+            return self._clone(segments, language, self._preset_prompt(voice), params, warnings)
+        # cloned
+        if styled:
+            raise ValueError(
+                f"'{voice.id}' is a cloned voice: it supports [pause] markup but not style/emotion instructions. "
+                "Use a built-in voice or a voice description for styled delivery."
+            )
+        return self._clone(segments, language, self._saved_voice_prompt(voice), params, warnings)
+
+    # ---------------------------------------------------------------- clone prompts
+
+    def _cached_prompt(self, key: str, build: Callable[[], Any]) -> Any:
+        with self._prompt_lock:
+            if key in self._prompts:
+                self._prompts.move_to_end(key)
+                return self._prompts[key]
+        prompt = build()
+        with self._prompt_lock:
+            self._prompts[key] = prompt
+            while len(self._prompts) > 64:
+                self._prompts.popitem(last=False)
+        return prompt
+
+    def _prepare_reference(self, ref_audio: Audio, ref_text: Optional[str], warnings: list[str]) -> Audio:
+        wav, sr = ref_audio
+        wav = A.trim_silence(wav, sr)
+        seconds = len(wav) / sr
+        if seconds < self.settings.min_ref_seconds:
+            raise ValueError(
+                f"Reference audio has {seconds:.1f}s of speech; at least {self.settings.min_ref_seconds:g}s is required."
+            )
+        if seconds > self.settings.max_ref_seconds:
+            if ref_text:
+                raise ValueError(
+                    f"Reference audio is {seconds:.0f}s; the limit is {self.settings.max_ref_seconds:g}s. "
+                    "Use a shorter clip (5-15 s works best) with its matching transcript."
+                )
+            wav = wav[: int(self.settings.max_ref_seconds * sr)]
+            warnings.append(f"Reference audio was trimmed to {self.settings.max_ref_seconds:g}s.")
+        return A.peak_normalize(wav), sr
+
+    def _adhoc_prompt(self, ref_audio: Audio, ref_text: Optional[str], x_vector_only: bool, warnings: list[str]):
+        ref_text = (ref_text or "").strip() or None
+        if not ref_text and not x_vector_only:
+            x_vector_only = True
+            warnings.append("No reference transcript given: using speaker-embedding-only cloning, "
+                            "which is less faithful. Provide ref_text for best results.")
+        ref = self._prepare_reference(ref_audio, ref_text, warnings)
+        key = "adhoc:" + A.fingerprint(ref, ref_text, x_vector_only)
+        return self._cached_prompt(key, lambda: self.backend.create_clone_prompt(ref, ref_text, x_vector_only))
+
+    def _saved_voice_prompt(self, voice: Voice):
+        def build():
+            ref, ref_text = self.library.reference(voice.id)
+            return self.backend.create_clone_prompt(ref, ref_text, x_vector_only=not ref_text)
+        return self._cached_prompt(f"voice:{voice.id}", build)
+
+    def _preset_prompt(self, voice: Voice):
+        """Clone prompt for a designed preset, rendering and caching its reference clip on first use."""
+        def build():
+            folder = self.settings.presets_dir / self.backend.name
+            wav_path, txt_path = folder / f"{voice.id}.wav", folder / f"{voice.id}.txt"
+            if wav_path.is_file() and txt_path.is_file():
+                ref, text = A.load_audio(wav_path), txt_path.read_text(encoding="utf-8")
+            else:
+                text = ANCHOR_TEXT.get(voice.language, ANCHOR_TEXT["English"])
+                wavs, sr = self.backend.voice_design(
+                    [text], voice.language, [voice.description], GenerationParams(seed=PRESET_ANCHOR_SEED))
+                ref = (wavs[0], sr)
+                A.save_wav(wav_path, *ref)
+                txt_path.write_text(text, encoding="utf-8")
+            return self.backend.create_clone_prompt(ref, text, x_vector_only=False)
+        return self._cached_prompt(f"preset:{voice.id}", build)
+
+
+_engine: Optional[Engine] = None
+_engine_lock = threading.Lock()
+
+
+def get_engine() -> Engine:
+    global _engine
+    with _engine_lock:
+        if _engine is None:
+            _engine = Engine()
+        return _engine
+
+
+def set_engine(engine: Optional[Engine]) -> None:
+    global _engine
+    with _engine_lock:
+        _engine = engine

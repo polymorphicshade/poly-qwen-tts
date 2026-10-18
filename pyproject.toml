@@ -1,0 +1,51 @@
+[project]
+name = "poly-qwen-tts"
+version = "0.1.0"
+description = "Qwen3-TTS toolkit: voice design, granular control, zero-shot & cross-lingual cloning, voice library — via web UI, REST API and CLI."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# The real inference backend. Without it the app still runs on the mock backend.
+qwen = [
+    "qwen-tts==0.1.1",
+    "torch>=2.6",
+    "torchaudio>=2.6",
+]
+
+[project.scripts]
+poly-tts = "poly_tts.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/poly_tts"]
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
