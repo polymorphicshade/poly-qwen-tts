@@ -4,11 +4,9 @@ Two converters are supported. Both run from a source checkout (their PyPI packag
 protobuf versions that conflict with qwen-tts), with weights downloaded from Hugging Face on first use:
 
 * **Seed-VC** (default, best quality): diffusion-transformer VC, 22.05 kHz speech model.
-  ``git clone https://github.com/Plachtaa/seed-vc data/vendor/seed-vc``
 * **OpenVoice v2** (lighter, faster fallback): tone-colour converter only.
-  ``git clone https://github.com/myshell-ai/OpenVoice data/vendor/OpenVoice``
 
-Both need the ``vc`` extra (``uv sync --extra qwen --extra vc``).
+``uv run python scripts/setup_vc.py`` installs the ``vc`` extra and checks out both at the tested commits.
 """
 
 from __future__ import annotations
@@ -75,6 +73,7 @@ class _CheckoutConverter(VoiceConverter):
     """A converter that imports its model code from a source checkout."""
 
     repo_url = ""
+    commit = ""  # the tested revision; scripts/setup_vc.py checks this out
     marker = ""  # a file that identifies a valid checkout
 
     def __init__(self, settings: Settings, repo_dir: Path):
@@ -85,8 +84,8 @@ class _CheckoutConverter(VoiceConverter):
 
     def available(self) -> tuple[bool, str]:
         if not (self.repo_dir / self.marker).is_file():
-            return False, (f"{self.name} is not installed: run `git clone {self.repo_url} {self.repo_dir}` "
-                           f"and `uv sync --extra qwen --extra vc`.")
+            return False, (f"{self.name} is not installed: run `uv run python scripts/setup_vc.py` "
+                           f"(or `git clone {self.repo_url} {self.repo_dir}` and `uv sync --extra qwen --extra vc`).")
         missing = [m for m in self.modules if importlib.util.find_spec(m) is None]
         if missing:
             return False, f"{self.name} needs {', '.join(missing)}: run `uv sync --extra qwen --extra vc`."
@@ -129,6 +128,7 @@ class SeedVCConverter(_CheckoutConverter):
 
     name = "seed-vc"
     repo_url = "https://github.com/Plachtaa/seed-vc"
+    commit = "51383efd921027683c89e5348211d93ff12ac2a8"
     marker = "modules/commons.py"
     modules = ("torch", "torchaudio", "librosa", "munch", "einops", "yaml", "scipy", "matplotlib")
     HF_REPO = "Plachta/Seed-VC"
@@ -283,6 +283,7 @@ class OpenVoiceConverter(_CheckoutConverter):
 
     name = "openvoice"
     repo_url = "https://github.com/myshell-ai/OpenVoice"
+    commit = "74a1d147b17a8c3092dd5430504bd83ef6c7eb23"
     marker = "openvoice/models.py"
     HF_REPO = "myshell-ai/OpenVoiceV2"
 

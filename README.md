@@ -74,13 +74,13 @@ The Base model that clones voices takes no instructions, so plain clones can't f
 
 The target can be an uploaded or recorded clip, a saved clone or a designed preset. A performer close to the target's gender and pitch converts best. Output is 22.05 kHz.
 
-Setup: both converters run from a source checkout, because their PyPI packaging pins old numpy/protobuf versions that conflict with qwen-tts. Their weights download from Hugging Face on first use.
+Setup: both converters run from a source checkout, because their PyPI packaging pins old numpy/protobuf versions that conflict with qwen-tts. A script sets this up:
 
 ```sh
-uv sync --extra qwen --extra vc
-git clone https://github.com/Plachtaa/seed-vc data/vendor/seed-vc          # tested at 51383ef
-git clone https://github.com/myshell-ai/OpenVoice data/vendor/OpenVoice    # optional fallback, tested at 74a1d14
+uv run python scripts/setup_vc.py           # add --only seed-vc to skip OpenVoice, --load to also fetch the weights now
 ```
+
+It installs the `vc` extra (`uv sync --extra qwen --extra vc`), checks out Seed-VC and OpenVoice at their tested commits into `data/vendor/` (or `POLY_TTS_SEED_VC_DIR` / `POLY_TTS_OPENVOICE_DIR`), and checks that poly-tts can load them. You can rerun it safely. Otherwise the weights download from Hugging Face on first use.
 
 ```sh
 poly-tts styled-clone "I can't believe you did this!" --ref-audio me.wav --emotion anger --intensity strong --delivery shouting

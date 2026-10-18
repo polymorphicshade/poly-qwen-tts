@@ -85,7 +85,7 @@ def test_missing_converter_checkouts_explain_setup(engine, tmp_path):
     for cls in (SeedVCConverter, OpenVoiceConverter):
         conv = cls(engine.settings, tmp_path / "nope")
         ok, why = conv.available()
-        assert not ok and "git clone" in why
+        assert not ok and "setup_vc.py" in why and "git clone" in why
         with pytest.raises(BackendError, match="git clone"):
             conv.load()
 
