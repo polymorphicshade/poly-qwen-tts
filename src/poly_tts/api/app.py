@@ -90,6 +90,10 @@ def create_app(engine: Optional[Engine] = None) -> FastAPI:
 
     # ------------------------------------------------------------------ metadata
 
+    @app.get("/api/health", tags=["meta"])
+    def health():
+        return {"status": "ok"}
+
     @app.get("/api/info", tags=["meta"])
     def info():
         e = eng()

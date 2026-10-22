@@ -28,6 +28,27 @@ The weights (~4.3 GB per model) are downloaded from Hugging Face the first time 
 
 To try the UI, API and CLI without a GPU, use the mock backend, which outputs placeholder tones instead of speech: `uv sync && uv run poly-tts --backend mock serve`.
 
+`START.bat` / `START.sh` launch the server from the `.venv` on port 8000; extra arguments go to `poly-tts serve`.
+
+## Docker (Linux server)
+
+`docker-compose.yml` runs the app on an NVIDIA GPU behind [Caddy](https://caddyserver.com), which serves it over HTTPS with its own certificate. The host needs Docker, the NVIDIA driver (570 or newer) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+```bash
+cp .env.example .env          # set DOMAIN, and optionally the model settings and serve flags
+docker compose up -d --build
+docker compose logs -f app
+```
+
+- **Certificate:** if `DOMAIN` is a public name whose DNS points at the server, Caddy gets a Let's Encrypt certificate automatically and renews it. Ports 80 and 443 must be reachable for that. For `localhost`, an IP address or a LAN-only name, Caddy issues a certificate from its own local CA, and browsers warn until you trust that CA. To use a certificate you already have, put it in `deploy/certs/` and set `CADDY_TLS=tls /certs/fullchain.pem /certs/privkey.pem`.
+- **Only Caddy is exposed.** The app listens on port 8000 inside the compose network only.
+- **Password:** the app has no login of its own. Copy `deploy/conf.d/auth.caddy.example` to `deploy/conf.d/auth.caddy` and fill in a hash, which turns on HTTP basic auth in front of everything. The example file explains how to make the hash.
+- **Storage:** weights download on first use into the `models` volume. Saved voices and presets go to the `library` volume. Certificates live in `caddy_data`; keep that volume, so certificates aren't re-issued.
+- **Styled Clone** works out of the box: the image includes the `vc` extra and Seed-VC / OpenVoice checked out at their tested commits.
+- **Settings:** `POLY_TTS_SERVE_ARGS` passes extra `poly-tts serve` flags, for example `--preload`. Any other `POLY_TTS_*` variable (see [Configuration](#configuration-environment-variables)) can be added under `environment:` in `docker-compose.yml`. `HF_TOKEN` speeds up downloads.
+
+The image runs on its own too: `docker build -t poly-qwen-tts .`, then `docker run --gpus all -p 8000:8000 -v tts-cache:/data/cache -v tts-library:/data/library poly-qwen-tts`.
+
 ## Web UI
 
 Each **tab is an independent workspace** with every control. Use `+` (or Alt+N) to open one and `×` (or middle-click, or Alt+W) to close it. Double-click a tab to rename it. Workspaces can generate in parallel, and their settings are remembered in the browser. In the clone modes you can upload a clip or record one from the microphone, and save it to the voice library.

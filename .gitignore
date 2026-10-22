@@ -5,3 +5,7 @@ __pycache__/
 /data/
 /outputs/
 *.egg-info/
+.env
+deploy/conf.d/*.caddy
+deploy/certs/*
+!deploy/certs/.gitkeep
