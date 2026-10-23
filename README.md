@@ -32,20 +32,32 @@ To try the UI, API and CLI without a GPU, use the mock backend, which outputs pl
 
 ## Docker (Linux server)
 
-`docker-compose.yml` runs the app on an NVIDIA GPU behind [Caddy](https://caddyserver.com), which serves it over HTTPS with its own certificate. The host needs Docker, the NVIDIA driver (570 or newer) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+There are two compose files. Both run the app on an NVIDIA GPU. The host needs Docker, the NVIDIA driver (570 or newer) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). On Ubuntu or Debian, `sudo ./NVIDIA.sh` installs all three and checks that a container can see the GPU.
+
+**Plain HTTP** (`docker-compose.yml`):
 
 ```bash
-cp .env.example .env          # set DOMAIN, and optionally the model settings and serve flags
+cp .env.example .env          # optional: port, model settings and serve flags
 docker compose up -d --build
 docker compose logs -f app
 ```
 
-- **Certificate:** if `DOMAIN` is a public name whose DNS points at the server, Caddy gets a Let's Encrypt certificate automatically and renews it. Ports 80 and 443 must be reachable for that. For `localhost`, an IP address or a LAN-only name, Caddy issues a certificate from its own local CA, and browsers warn until you trust that CA. To use a certificate you already have, put it in `deploy/certs/` and set `CADDY_TLS=tls /certs/fullchain.pem /certs/privkey.pem`.
-- **Only Caddy is exposed.** The app listens on port 8000 inside the compose network only.
-- **Password:** the app has no login of its own. Copy `deploy/conf.d/auth.caddy.example` to `deploy/conf.d/auth.caddy` and fill in a hash, which turns on HTTP basic auth in front of everything. The example file explains how to make the hash.
-- **Storage:** weights download on first use into the `models` volume. Saved voices and presets go to the `library` volume. Certificates live in `caddy_data`; keep that volume, so certificates aren't re-issued.
+The UI is then at `http://<host>:8000`.
+
+**HTTPS** (`docker-compose.https.yml`) runs the same app plus an nginx sidecar that terminates TLS:
+
+```bash
+cp .env.https.example .env    # list the host's LAN address in TLS_SAN
+docker compose -f docker-compose.https.yml up -d --build
+```
+
+The UI is then at `https://<host>:8443`. Browsers only allow microphone recording on HTTPS pages (or `localhost`), so use this stack to record reference clips from another machine.
+
+- **Certificate:** a self-signed certificate is generated into `./certs` on first boot, so the browser warns once until you accept it. Every address you type in the browser must be in `TLS_SAN`, e.g. `IP:192.168.1.99`. After changing it, delete `./certs` and restart to mint a new one. To use a CA-issued certificate, put `fullchain.pem` and `privkey.pem` in `./certs`.
+- **Ports:** in the HTTPS stack, 8000 is the app's plain HTTP listener and is published on `127.0.0.1` only. `https://<host>:8000` fails with `SSL_ERROR_RX_RECORD_TOO_LONG` because nothing there speaks TLS. Change either port with `HTTPS_PORT` and `PORT` in `.env`.
+- **Storage:** weights download on first use into the `models` volume. Saved voices and presets go to the `library` volume. Both stacks share these volumes.
 - **Styled Clone** works out of the box: the image includes the `vc` extra and Seed-VC / OpenVoice checked out at their tested commits.
-- **Settings:** `POLY_TTS_SERVE_ARGS` passes extra `poly-tts serve` flags, for example `--preload`. Any other `POLY_TTS_*` variable (see [Configuration](#configuration-environment-variables)) can be added under `environment:` in `docker-compose.yml`. `HF_TOKEN` speeds up downloads.
+- **Settings:** `POLY_TTS_SERVE_ARGS` passes extra `poly-tts serve` flags, for example `--preload`. Any other `POLY_TTS_*` variable (see [Configuration](#configuration-environment-variables)) can be added under `environment:` in the compose file. `HF_TOKEN` speeds up downloads.
 
 The image runs on its own too: `docker build -t poly-qwen-tts .`, then `docker run --gpus all -p 8000:8000 -v tts-cache:/data/cache -v tts-library:/data/library poly-qwen-tts`.
 

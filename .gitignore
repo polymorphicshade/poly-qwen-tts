@@ -6,6 +6,5 @@ __pycache__/
 /outputs/
 *.egg-info/
 .env
-deploy/conf.d/*.caddy
-deploy/certs/*
-!deploy/certs/.gitkeep
+# TLS certificates (generated on first boot of the HTTPS stack)
+certs/
